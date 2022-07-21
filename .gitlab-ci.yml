@@ -1,0 +1,84 @@
+default:
+  tags:
+    - shared-runner-sig-products 
+
+stages:
+  - build
+  # Remark. I once used custom stages, e.g. "sast", "sca", instead of "test" which ended up in
+  # an odd maven error, a wrong MAVEN_CONFIG value for the path to .m2.
+  # Given that, we should use defult stages instead for the safe side.  
+  - test
+  - deploy
+
+# Image with openjdk-17 and maven 3.8.5
+image: maven:3.8.5-openjdk-17-slim
+
+variables:
+  MAVEN_CLI_OPTS: "-s .m2/settings.xml --batch-mode"
+  # We have to add java modules to the whitelist --add-opens to workaround 
+  # a known JDK17 security restriction
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository
+               -Dmaven.artifact.threads=50
+               --add-opens java.base/java.lang=ALL-UNNAMED
+               --add-opens java.base/java.lang.reflect=ALL-UNNAMED
+               --add-opens java.base/java.util=ALL-UNNAMED               
+               --add-opens java.base/java.util.regex=ALL-UNNAMED
+               --add-opens java.base/java.net=ALL-UNNAMED"
+
+cache:
+  paths:
+    - .m2/repository/
+    - cov-intermediate/
+
+build-job:
+  stage: build
+  script:
+    - echo "Code is being built now!"
+    # Unfortunately some unit test fails and we have to ignore them
+    - ./mvnw -e -Dmaven.test.failure.ignore=true clean install
+
+test-sast:
+  stage: test
+  before_script:
+    - export PATH=/opt/coverity/$COV_VERSION/bin:$PATH
+    # Restrict non-owner access; otherwise cov-commit-defects does not allow you to commit
+    - chmod 400 /opt/coverity/auth-key.txt
+    # Might be overkill but to make sure that Coverity Analysis runs synchronusly  
+    - export COVERITY_CLI_CLOUD_ANALYSIS_ASYNC=false
+    # Dependency resolution for the result checking shell
+    - apt-get update && apt install -y jq
+
+    - chmod u+x synopsys/src/cov_results_check.sh
+    - chmod u+x synopsys/src/post_comment_to_commit.sh
+
+    # Run only after cov-analyze version update to workaround version unmatch error
+    #- rm -rf cov-intermediate
+  script:
+    - echo "SAST testing is executed now!"
+    - cov-configure --java
+    - cov-build --dir cov-intermediate ./mvnw -e -Dmaven.test.failure.ignore=true clean install
+    # Use node-unlocked license to cope with the volatile MAC address
+    - cov-analyze --dir cov-intermediate
+    - cov-commit-defects
+         --dir ./cov-intermediate
+         --url $COV_CONNECT_URL
+         --auth-key-file $COV_CONNECT_AUTHKEY_PATH
+         --stream $COV_STREAM
+    - echo "Checking results from SAST now!"
+    - ./synopsys/src/cov_results_check.sh
+
+    - echo "Posting SAST comments to the commit now!"
+    - ./synopsys/src/post_comment_to_commit.sh $COV_RESULTS_OCCURRENCES_FILE
+    - ./synopsys/src/post_comment_to_commit.sh $COV_RESULTS_ISSUES_FILE
+    - sleep 20
+
+test-sca:
+  stage: test
+  script:
+    - echo "SCA testing is executed now!"
+    - sleep 20
+
+deploy-prod:
+  stage: deploy
+  script:
+    - echo "This job deploys something from the $CI_COMMIT_BRANCH branch."
