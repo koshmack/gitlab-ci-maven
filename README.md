@@ -2,6 +2,10 @@
 ## About this project
 This project is a small showcase for the integration of Synopsys software integrity products with GitLab CI Pipeline.
 
+## Features
+Invocation of Coverity SAST\
+Upload the scan results from Coverity to the GitLab commit comment
+
 ## Usage (not details)
 1. git clone this project
 2. Create a GitLab project in your GitLab instance
